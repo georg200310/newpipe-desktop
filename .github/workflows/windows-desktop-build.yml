@@ -18,7 +18,7 @@ permissions:
 
 jobs:
   build-windows:
-    name: Build Windows EXE and portable ZIP
+    name: Build Windows MSI and portable ZIP
     runs-on: windows-latest
     timeout-minutes: 90
 
@@ -33,18 +33,48 @@ jobs:
           java-version: "21"
           cache: gradle
 
-      - name: Set up Android SDK
+      # Explicit packages avoid the obsolete SDK package named "tools".
+      - name: Set up Android command-line tools
         uses: android-actions/setup-android@v3
+        with:
+          packages: "platform-tools"
 
       - name: Install Android API 37 platform
         shell: pwsh
-        run: sdkmanager "platforms;android-37"
+        run: |
+          sdkmanager "platforms;android-37"
+          if ($LASTEXITCODE -ne 0) {
+            throw "Could not install Android SDK platform 37."
+          }
 
-      - name: Build Windows installer and portable application
+      - name: Set up WiX Toolset 3
         shell: pwsh
-        run: .\gradlew.bat :desktopApp:packageExe :desktopApp:createDistributable --stacktrace
+        run: |
+          $programFilesX86 = [Environment]::GetFolderPath("ProgramFilesX86")
+          $wixBin = Get-ChildItem -Path $programFilesX86 -Directory -ErrorAction SilentlyContinue |
+            Where-Object { $_.Name -like "WiX Toolset v3*" } |
+            ForEach-Object { Join-Path $_.FullName "bin" } |
+            Where-Object { (Test-Path (Join-Path $_ "candle.exe")) -and (Test-Path (Join-Path $_ "light.exe")) } |
+            Select-Object -First 1
 
-      - name: Prepare portable ZIP and installer
+          if (-not $wixBin) {
+            choco install wixtoolset --version=3.14.1 --yes --no-progress
+            if ($LASTEXITCODE -ne 0) {
+              throw "Could not install WiX Toolset 3.14.1."
+            }
+            $wixBin = Join-Path $programFilesX86 "WiX Toolset v3.14\bin"
+          }
+
+          if (-not (Test-Path (Join-Path $wixBin "candle.exe"))) {
+            throw "WiX Toolset candle.exe was not found in $wixBin"
+          }
+          Add-Content -Path $env:GITHUB_PATH -Value $wixBin
+
+      - name: Build Windows MSI and portable application image
+        shell: pwsh
+        run: .\gradlew.bat :desktopApp:packageMsi :desktopApp:createDistributable --no-daemon --stacktrace
+
+      - name: Collect MSI and portable ZIP
         shell: pwsh
         run: |
           $binaryRoot = Join-Path $PWD "desktopApp\build\compose\binaries"
@@ -52,40 +82,31 @@ jobs:
             throw "Gradle did not create the Compose binaries directory."
           }
 
+          $msi = Get-ChildItem -Path $binaryRoot -Filter "*.msi" -File -Recurse | Select-Object -First 1
+          if ($null -eq $msi) {
+            Get-ChildItem -Path $binaryRoot -Recurse | Select-Object FullName
+            throw "No MSI installer was created."
+          }
+          Copy-Item -Path $msi.FullName -Destination (Join-Path $PWD "NewPipe-Desktop-Windows-Setup.msi") -Force
+
           $portableApp = Get-ChildItem -Path $binaryRoot -Directory -Recurse |
             Where-Object {
               (Test-Path (Join-Path $_.FullName "bin")) -and
-              (Get-ChildItem -Path (Join-Path $_.FullName "bin") -Filter "*.exe" -File -ErrorAction SilentlyContinue | Measure-Object).Count -gt 0
-            } |
-            Select-Object -First 1
+              ((Get-ChildItem -Path (Join-Path $_.FullName "bin") -Filter "*.exe" -File -ErrorAction SilentlyContinue | Measure-Object).Count -gt 0)
+            } | Select-Object -First 1
 
           if ($null -eq $portableApp) {
             Get-ChildItem -Path $binaryRoot -Recurse | Select-Object FullName
-            throw "Could not find the portable application image."
+            throw "Could not find the portable app image (bin\*.exe)."
           }
-
-          Compress-Archive -Path (Join-Path $portableApp.FullName "*") `
-            -DestinationPath (Join-Path $PWD "NewPipe-Desktop-Windows-Portable.zip") `
-            -CompressionLevel Optimal -Force
-
-          $installer = Get-ChildItem -Path $binaryRoot -Filter "*.exe" -File -Recurse |
-            Where-Object { $_.Directory.Name -eq "exe" } |
-            Select-Object -First 1
-
-          if ($null -eq $installer) {
-            Get-ChildItem -Path $binaryRoot -Recurse | Select-Object FullName
-            throw "Could not find the EXE installer created by packageExe."
-          }
-
-          Copy-Item -Path $installer.FullName `
-            -Destination (Join-Path $PWD "NewPipe-Desktop-Windows-Setup.exe") -Force
+          Compress-Archive -Path (Join-Path $portableApp.FullName "*") -DestinationPath (Join-Path $PWD "NewPipe-Desktop-Windows-Portable.zip") -CompressionLevel Optimal -Force
 
       - name: Upload Windows files
         uses: actions/upload-artifact@v7
         with:
           name: NewPipe-Desktop-Windows
           path: |
-            NewPipe-Desktop-Windows-Setup.exe
+            NewPipe-Desktop-Windows-Setup.msi
             NewPipe-Desktop-Windows-Portable.zip
           if-no-files-found: error
           retention-days: 14
