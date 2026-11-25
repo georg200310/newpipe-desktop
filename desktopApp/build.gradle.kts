@@ -25,6 +25,7 @@ compose.desktop {
         mainClass = "net.newpipe.app.MainKt"
 
         nativeDistributions {
+            // Windows MSI installer is the requested package format.
             targetFormats(TargetFormat.Msi)
             packageName = NEWPIPE_APPLICATION_ID_NEW
             packageVersion = NEWPIPE_VERSION_NAME
