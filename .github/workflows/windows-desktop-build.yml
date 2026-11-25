@@ -1,0 +1,91 @@
+name: Windows desktop build
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - dev
+    paths:
+      - "desktopApp/**"
+      - "shared/**"
+      - "gradle/**"
+      - "*.gradle.kts"
+      - "gradlew"
+      - ".github/workflows/windows-desktop-build.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  build-windows:
+    name: Build Windows EXE and portable ZIP
+    runs-on: windows-latest
+    timeout-minutes: 90
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v6
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: gradle
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android API 37 platform
+        shell: pwsh
+        run: sdkmanager "platforms;android-37"
+
+      - name: Build Windows installer and portable application
+        shell: pwsh
+        run: .\gradlew.bat :desktopApp:packageExe :desktopApp:createDistributable --stacktrace
+
+      - name: Prepare portable ZIP and installer
+        shell: pwsh
+        run: |
+          $binaryRoot = Join-Path $PWD "desktopApp\build\compose\binaries"
+          if (!(Test-Path $binaryRoot)) {
+            throw "Gradle did not create the Compose binaries directory."
+          }
+
+          $portableApp = Get-ChildItem -Path $binaryRoot -Directory -Recurse |
+            Where-Object {
+              (Test-Path (Join-Path $_.FullName "bin")) -and
+              (Get-ChildItem -Path (Join-Path $_.FullName "bin") -Filter "*.exe" -File -ErrorAction SilentlyContinue | Measure-Object).Count -gt 0
+            } |
+            Select-Object -First 1
+
+          if ($null -eq $portableApp) {
+            Get-ChildItem -Path $binaryRoot -Recurse | Select-Object FullName
+            throw "Could not find the portable application image."
+          }
+
+          Compress-Archive -Path (Join-Path $portableApp.FullName "*") `
+            -DestinationPath (Join-Path $PWD "NewPipe-Desktop-Windows-Portable.zip") `
+            -CompressionLevel Optimal -Force
+
+          $installer = Get-ChildItem -Path $binaryRoot -Filter "*.exe" -File -Recurse |
+            Where-Object { $_.Directory.Name -eq "exe" } |
+            Select-Object -First 1
+
+          if ($null -eq $installer) {
+            Get-ChildItem -Path $binaryRoot -Recurse | Select-Object FullName
+            throw "Could not find the EXE installer created by packageExe."
+          }
+
+          Copy-Item -Path $installer.FullName `
+            -Destination (Join-Path $PWD "NewPipe-Desktop-Windows-Setup.exe") -Force
+
+      - name: Upload Windows files
+        uses: actions/upload-artifact@v7
+        with:
+          name: NewPipe-Desktop-Windows
+          path: |
+            NewPipe-Desktop-Windows-Setup.exe
+            NewPipe-Desktop-Windows-Portable.zip
+          if-no-files-found: error
+          retention-days: 14
