@@ -1,4 +1,4 @@
-name: Windows desktop build
+name: Windows desktop MSI build
 
 on:
   workflow_dispatch:
@@ -18,7 +18,7 @@ permissions:
 
 jobs:
   build-windows:
-    name: Build Windows MSI and portable ZIP
+    name: Build Windows MSI installer
     runs-on: windows-latest
     timeout-minutes: 90
 
@@ -44,7 +44,7 @@ jobs:
         run: |
           sdkmanager "platforms;android-37.0"
           if ($LASTEXITCODE -ne 0) {
-            throw "Could not install Android SDK platform 37."
+            throw "Could not install Android SDK platform 37.0."
           }
 
       - name: Set up WiX Toolset 3
@@ -70,11 +70,11 @@ jobs:
           }
           Add-Content -Path $env:GITHUB_PATH -Value $wixBin
 
-      - name: Build Windows MSI and portable application image
+      - name: Build Windows MSI installer
         shell: pwsh
-        run: .\gradlew.bat :desktopApp:packageMsi :desktopApp:createDistributable --no-daemon --stacktrace
+        run: .\gradlew.bat :desktopApp:packageMsi --no-daemon --stacktrace
 
-      - name: Collect MSI and portable ZIP
+      - name: Collect MSI installer
         shell: pwsh
         run: |
           $binaryRoot = Join-Path $PWD "desktopApp\build\compose\binaries"
@@ -82,31 +82,20 @@ jobs:
             throw "Gradle did not create the Compose binaries directory."
           }
 
-          $msi = Get-ChildItem -Path $binaryRoot -Filter "*.msi" -File -Recurse | Select-Object -First 1
+          $msi = Get-ChildItem -Path $binaryRoot -Filter "*.msi" -File -Recurse |
+            Select-Object -First 1
+
           if ($null -eq $msi) {
             Get-ChildItem -Path $binaryRoot -Recurse | Select-Object FullName
             throw "No MSI installer was created."
           }
+
           Copy-Item -Path $msi.FullName -Destination (Join-Path $PWD "NewPipe-Desktop-Windows-Setup.msi") -Force
 
-          $portableApp = Get-ChildItem -Path $binaryRoot -Directory -Recurse |
-            Where-Object {
-              (Test-Path (Join-Path $_.FullName "bin")) -and
-              ((Get-ChildItem -Path (Join-Path $_.FullName "bin") -Filter "*.exe" -File -ErrorAction SilentlyContinue | Measure-Object).Count -gt 0)
-            } | Select-Object -First 1
-
-          if ($null -eq $portableApp) {
-            Get-ChildItem -Path $binaryRoot -Recurse | Select-Object FullName
-            throw "Could not find the portable app image (bin\*.exe)."
-          }
-          Compress-Archive -Path (Join-Path $portableApp.FullName "*") -DestinationPath (Join-Path $PWD "NewPipe-Desktop-Windows-Portable.zip") -CompressionLevel Optimal -Force
-
-      - name: Upload Windows files
+      - name: Upload MSI installer
         uses: actions/upload-artifact@v7
         with:
-          name: NewPipe-Desktop-Windows
-          path: |
-            NewPipe-Desktop-Windows-Setup.msi
-            NewPipe-Desktop-Windows-Portable.zip
+          name: NewPipe-Desktop-Windows-MSI
+          path: NewPipe-Desktop-Windows-Setup.msi
           if-no-files-found: error
           retention-days: 14
