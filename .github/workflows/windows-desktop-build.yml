@@ -39,10 +39,10 @@ jobs:
         with:
           packages: "platform-tools"
 
-      - name: Install Android API 37 platform
+      - name: Install Android API 37.0 platform
         shell: pwsh
         run: |
-          sdkmanager "platforms;android-37"
+          sdkmanager "platforms;android-37.0"
           if ($LASTEXITCODE -ne 0) {
             throw "Could not install Android SDK platform 37."
           }
